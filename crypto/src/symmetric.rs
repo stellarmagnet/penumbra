@@ -4,7 +4,9 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
 };
 
-use crate::ka;
+use crate::{ka, keys::OutgoingViewingKey, note, value};
+
+pub const OVK_WRAPPED_LEN_BYTES: usize = 48;
 
 /// Represents the item to be encrypted/decrypted with the [`PayloadKey`].
 pub enum PayloadKind {
@@ -29,7 +31,7 @@ impl PayloadKind {
 pub struct PayloadKey(Key);
 
 impl PayloadKey {
-    /// Use Blake2b-256 to derive the symmetric key material for note and memo encryption.
+    /// Use Blake2b-256 to derive a `PayloadKey`.
     pub fn derive(shared_secret: &ka::SharedSecret, epk: &ka::Public) -> Self {
         let mut kdf_params = blake2b_simd::Params::new();
         kdf_params.hash_length(32);
@@ -61,5 +63,99 @@ impl PayloadKey {
         cipher
             .decrypt(nonce, ciphertext.as_ref())
             .map_err(|_| anyhow::anyhow!("decryption error"))
+    }
+}
+
+/// Represents a symmetric `ChaCha20Poly1305` key.
+///
+/// Used for encrypting and decrypting [`OvkWrappedKey`] material used to decrypt
+/// outgoing swaps, notes, and memos.
+pub struct OutgoingCipherKey(Key);
+
+impl OutgoingCipherKey {
+    /// Use Blake2b-256 to derive an encryption key `ock` from the OVK and public fields.
+    pub(crate) fn derive(
+        ovk: &OutgoingViewingKey,
+        cv: value::Commitment,
+        cm: note::Commitment,
+        epk: &ka::Public,
+    ) -> Self {
+        let cv_bytes: [u8; 32] = cv.into();
+        let cm_bytes: [u8; 32] = cm.into();
+
+        let mut kdf_params = blake2b_simd::Params::new();
+        kdf_params.hash_length(32);
+        let mut kdf = kdf_params.to_state();
+        kdf.update(&ovk.0);
+        kdf.update(&cv_bytes);
+        kdf.update(&cm_bytes);
+        kdf.update(&epk.0);
+
+        let key = kdf.finalize();
+        Self(*Key::from_slice(key.as_bytes()))
+    }
+
+    /// Encrypt key material using the `OutgoingCipherKey`.
+    pub fn encrypt(&self, plaintext: Vec<u8>, kind: PayloadKind) -> Vec<u8> {
+        let cipher = ChaCha20Poly1305::new(&self.0);
+
+        // Note: Here we use the same nonce as note encryption, however the keys are different.
+        // For note encryption we derive the `PayloadKey` symmetric key from the shared secret and epk.
+        // However, for the outgoing cipher key, we derive a symmetric key from the
+        // sender's OVK, value commitment, note commitment, and the epk. Since the keys are
+        // different, it is safe to use the same nonce.
+        //
+        // References:
+        // * Section 5.4.3 of the ZCash protocol spec
+        // * Section 2.3 RFC 7539
+        let nonce_bytes = kind.nonce();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        cipher
+            .encrypt(nonce, plaintext.as_ref())
+            .expect("encryption succeeded")
+    }
+
+    /// Decrypt key material using the `OutgoingCipherKey`.
+    pub fn decrypt(&self, ciphertext: Vec<u8>, kind: PayloadKind) -> Result<Vec<u8>> {
+        let cipher = ChaCha20Poly1305::new(&self.0);
+        let nonce_bytes = kind.nonce();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|_| anyhow::anyhow!("decryption error"))
+    }
+}
+
+/// Represents encrypted key material used to reconstruct a `PayloadKey`.
+#[derive(Clone, Debug)]
+pub struct OvkWrappedKey(pub [u8; OVK_WRAPPED_LEN_BYTES]);
+
+impl OvkWrappedKey {
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.0.to_vec()
+    }
+}
+
+impl TryFrom<Vec<u8>> for OvkWrappedKey {
+    type Error = anyhow::Error;
+
+    fn try_from(vector: Vec<u8>) -> Result<Self, Self::Error> {
+        let bytes: [u8; OVK_WRAPPED_LEN_BYTES] = vector
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("wrapped OVK malformed"))?;
+        Ok(Self(bytes))
+    }
+}
+
+impl TryFrom<&[u8]> for OvkWrappedKey {
+    type Error = anyhow::Error;
+
+    fn try_from(arr: &[u8]) -> Result<Self, Self::Error> {
+        let bytes: [u8; OVK_WRAPPED_LEN_BYTES] = arr
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("wrapped OVK malformed"))?;
+        Ok(Self(bytes))
     }
 }

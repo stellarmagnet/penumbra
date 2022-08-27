@@ -1,70 +1,60 @@
-mod addr;
-mod balance;
-mod chain;
+mod keys;
 mod query;
-mod stake;
 mod tx;
 mod validator;
-mod wallet;
+mod view;
 
-pub use addr::AddrCmd;
-pub use balance::BalanceCmd;
-pub use chain::ChainCmd;
+pub use keys::KeysCmd;
 pub use query::QueryCmd;
-pub use stake::StakeCmd;
 pub use tx::TxCmd;
 pub use validator::ValidatorCmd;
-pub use wallet::WalletCmd;
+pub use view::ViewCmd;
+
+// Note on display_order:
+//
+// The value is between 0 and 999 (the default).  Sorting of subcommands is done
+// by display_order first, and then alphabetically.  We should not try to order
+// every set of subcommands -- for instance, it doesn't make sense to try to
+// impose a non-alphabetical ordering on the query subcommands -- but we can use
+// the order to group related commands.
+//
+// Setting spaced numbers is future-proofing, letting us insert other commands
+// without noisy renumberings.
+//
+// https://docs.rs/clap/latest/clap/builder/struct.App.html#method.display_order
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
-    /// Creates a transaction.
-    #[clap(subcommand)]
-    Tx(TxCmd),
-    /// Manages the wallet state.
-    #[clap(subcommand)]
-    Wallet(WalletCmd),
-    /// Manages addresses.
-    #[clap(subcommand)]
-    Addr(AddrCmd),
-    /// Synchronizes the client, privately scanning the chain state.
-    ///
-    /// `pcli` syncs automatically prior to any action requiring chain state,
-    /// but this command can be used to "pre-sync" before interactive use.
-    Sync,
-    /// Displays the current wallet balance.
-    Balance(BalanceCmd),
-    /// Manages a validator.
-    #[clap(subcommand)]
-    Validator(ValidatorCmd),
-    /// Manages delegations and undelegations.
-    #[clap(subcommand)]
-    Stake(StakeCmd),
-    /// Queries the public chain state.
+    /// Query the  public chain state, like the validator set.
     ///
     /// This command has two modes: it can be used to query raw bytes of
     /// arbitrary keys with the `key` subcommand, or it can be used to query
     /// typed data with a subcommand for a particular component.
-    #[clap(subcommand)]
-    Q(QueryCmd),
-    /// View chain data.
-    #[clap(subcommand)]
-    Chain(ChainCmd),
+    #[clap(subcommand, display_order = 200, visible_alias = "q")]
+    Query(QueryCmd),
+    /// View your private chain state, like account balances.
+    #[clap(subcommand, display_order = 300, visible_alias = "v")]
+    View(ViewCmd),
+    /// Create and broadcast a transaction.
+    #[clap(subcommand, display_order = 400, visible_alias = "tx")]
+    Transaction(TxCmd),
+    /// Manage your wallet's keys.
+    #[clap(subcommand, display_order = 500)]
+    Keys(KeysCmd),
+    /// Manage a validator.
+    #[clap(subcommand, display_order = 998)]
+    Validator(ValidatorCmd),
 }
 
 impl Command {
     /// Determine if this command requires a network sync before it executes.
     pub fn needs_sync(&self) -> bool {
         match self {
-            Command::Tx(cmd) => cmd.needs_sync(),
-            Command::Wallet(cmd) => cmd.needs_sync(),
-            Command::Addr(cmd) => cmd.needs_sync(),
-            Command::Sync => true,
-            Command::Balance(cmd) => cmd.needs_sync(),
+            Command::Transaction(cmd) => cmd.needs_sync(),
+            Command::View(cmd) => cmd.needs_sync(),
+            Command::Keys(cmd) => cmd.needs_sync(),
             Command::Validator(cmd) => cmd.needs_sync(),
-            Command::Stake(cmd) => cmd.needs_sync(),
-            Command::Chain(cmd) => cmd.needs_sync(),
-            Command::Q(_) => false,
+            Command::Query(_) => false,
         }
     }
 }

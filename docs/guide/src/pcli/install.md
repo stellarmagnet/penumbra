@@ -16,7 +16,7 @@ depending on your distribution. For a bare-bones Ubuntu installation, you can
 run:
 
 ```bash
-sudo apt-get install build-essential pkg-config libssl-dev
+sudo apt-get install build-essential pkg-config libssl-dev clang
 ```
 
 #### macOS
@@ -40,7 +40,7 @@ To build the version of `pcli` compatible with the current testnet, check out th
 the current test net:
 
 ```bash
-cd penumbra && git fetch && git checkout 025-helike && cargo update
+cd penumbra && git fetch && git checkout 026-hermippe && cargo update
 ```
 
 ### Building the `pcli` client software

@@ -1,9 +1,6 @@
 use penumbra_chain::NoteSource;
 use penumbra_crypto::{
-    asset,
-    ka::Public,
-    keys::{AddressIndex, Diversifier},
-    note, FieldExt, Fq, Note, Nullifier, Value,
+    asset, keys::AddressIndex, note, Address, FieldExt, Fq, Note, Nullifier, Value,
 };
 use penumbra_proto::{view as pb, Protobuf};
 use penumbra_tct as tct;
@@ -11,10 +8,10 @@ use penumbra_tct as tct;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-/// Corresponds to the NoteRecord proto
+/// Corresponds to the SpendableNoteRecord proto
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(try_from = "pb::NoteRecord", into = "pb::NoteRecord")]
-pub struct NoteRecord {
+#[serde(try_from = "pb::SpendableNoteRecord", into = "pb::SpendableNoteRecord")]
+pub struct SpendableNoteRecord {
     pub note_commitment: note::Commitment,
     pub note: Note,
     pub address_index: AddressIndex,
@@ -25,10 +22,10 @@ pub struct NoteRecord {
     pub source: NoteSource,
 }
 
-impl Protobuf<pb::NoteRecord> for NoteRecord {}
-impl From<NoteRecord> for pb::NoteRecord {
-    fn from(v: NoteRecord) -> Self {
-        pb::NoteRecord {
+impl Protobuf<pb::SpendableNoteRecord> for SpendableNoteRecord {}
+impl From<SpendableNoteRecord> for pb::SpendableNoteRecord {
+    fn from(v: SpendableNoteRecord) -> Self {
+        pb::SpendableNoteRecord {
             note_commitment: Some(v.note_commitment.into()),
             note: Some(v.note.into()),
             address_index: Some(v.address_index.into()),
@@ -41,10 +38,10 @@ impl From<NoteRecord> for pb::NoteRecord {
     }
 }
 
-impl TryFrom<pb::NoteRecord> for NoteRecord {
+impl TryFrom<pb::SpendableNoteRecord> for SpendableNoteRecord {
     type Error = anyhow::Error;
-    fn try_from(v: pb::NoteRecord) -> Result<Self, Self::Error> {
-        Ok(NoteRecord {
+    fn try_from(v: pb::SpendableNoteRecord) -> Result<Self, Self::Error> {
+        Ok(SpendableNoteRecord {
             note_commitment: v
                 .note_commitment
                 .ok_or_else(|| anyhow::anyhow!("missing note commitment"))?
@@ -72,33 +69,23 @@ impl TryFrom<pb::NoteRecord> for NoteRecord {
     }
 }
 
-impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for NoteRecord {
+impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for SpendableNoteRecord {
     fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         // This is not a fun time.
         // Mostly on account of sqlx::Error.
 
-        let diversifier =
-            Diversifier::try_from(row.get::<'r, &[u8], _>("diversifier")).map_err(|e| {
-                sqlx::Error::ColumnDecode {
-                    index: "diversifier".to_string(),
-                    source: e.into(),
-                }
-            })?;
+        let address = Address::try_from(row.get::<'r, &[u8], _>("address")).map_err(|e| {
+            sqlx::Error::ColumnDecode {
+                index: "address".to_string(),
+                source: e.into(),
+            }
+        })?;
 
         let address_index = AddressIndex::try_from(row.get::<'r, &[u8], _>("address_index"))
             .map_err(|e| sqlx::Error::ColumnDecode {
                 index: "address_index".to_string(),
                 source: e.into(),
             })?;
-
-        let transmission_key = Public(
-            <[u8; 32]>::try_from(row.get::<'r, &[u8], _>("transmission_key")).map_err(|e| {
-                sqlx::Error::ColumnDecode {
-                    index: "transmission_key".to_string(),
-                    source: e.into(),
-                }
-            })?,
-        );
 
         let amount = row.get::<'r, i64, _>("amount") as u64;
 
@@ -152,13 +139,12 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for NoteRecord {
         let position = (row.get::<'r, i64, _>("position") as u64).into();
 
         let value = Value { amount, asset_id };
-        let note =
-            Note::from_parts(diversifier, transmission_key, value, note_blinding).map_err(|e| {
-                sqlx::Error::ColumnDecode {
-                    index: "note".to_string(),
-                    source: e.into(),
-                }
-            })?;
+        let note = Note::from_parts(address, value, note_blinding).map_err(|e| {
+            sqlx::Error::ColumnDecode {
+                index: "note".to_string(),
+                source: e.into(),
+            }
+        })?;
 
         let source = NoteSource::try_from(row.get::<'r, &[u8], _>("source")).map_err(|e| {
             sqlx::Error::ColumnDecode {
@@ -167,7 +153,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for NoteRecord {
             }
         })?;
 
-        Ok(NoteRecord {
+        Ok(SpendableNoteRecord {
             note_commitment,
             note,
             address_index,

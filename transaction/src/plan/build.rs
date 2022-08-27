@@ -12,7 +12,7 @@ impl TransactionPlan {
     ///
     /// - `fvk`, the [`FullViewingKey`] for the source funds;
     /// - `auth_data`, the [`AuthorizationData`] authorizing the transaction;
-    /// - `witness_data`, the [`WitnessData`] used for proving.
+    /// - `witness_data`, the [`WitnessData`] used for proving;
     ///
     pub fn build<R: CryptoRng + RngCore>(
         self,
@@ -39,6 +39,7 @@ impl TransactionPlan {
         }
 
         let mut actions = Vec::new();
+        let mut fmd_clues = Vec::new();
         let mut synthetic_blinding_factor = Fr::zero();
 
         // We build the actions sorted by type, with all spends first, then all
@@ -62,6 +63,36 @@ impl TransactionPlan {
             // Outputs subtract from the transaction's value balance.
             synthetic_blinding_factor -= output_plan.value_blinding;
             actions.push(Action::Output(output_plan.output(fvk.outgoing())));
+        }
+
+        // Build the transaction's swaps.
+        // TODO: figure this out
+        //         the swap plans shouldn't require pulling in spend auth signatures, because the Swap just draws from the transaction's value balance. but we'll need to figure out how we handle the authentication paths (note commitment proofs) -- in the existing WitnessData struct, there's just one for each spend, in order, because (now-broken assumption) the only place they were needed was for spends.
+
+        // wondering if we should change the WitnessData domain type to store a BTreeMap<note::Commitment, tct::Proof>, and when deserializing from the proto, instead of just deserializing a list of proofs, call .commitment() on each one and use it as the key for the BTreeMap.
+
+        // then instead of having to do zips or whatever, or figure out how to maintain a brittle order dependency, we can just query for exactly the proof we want.
+        // for ((swap_plan, auth_sig), auth_path) in self
+        //     .swap_plans()
+        //     .zip(auth_data.spend_auths.into_iter())
+        //     .zip(witness_data.note_commitment_proofs.into_iter())
+        // {
+        //     actions.push(Action::Swap(swap_plan.swap(fvk, witness_data.anchor)));
+        // }
+
+        // Build the transaction's swap claims.
+        // for swap_claim_plan in self.swap_claim_plans().cloned() {
+        //     actions.push(Action::SwapClaim(swap_claim_plan.swap_claim(
+        //         fvk,
+        //         note_commitment_proof,
+        //         nk,
+        //         note_blinding,
+        //     )));
+        // }
+
+        // Build the clue plans.
+        for clue_plan in self.clue_plans() {
+            fmd_clues.push(clue_plan.clue());
         }
 
         // We don't have anything more to build, but iterate through the rest of
@@ -97,7 +128,7 @@ impl TransactionPlan {
                 expiry_height: self.expiry_height,
                 chain_id: self.chain_id,
                 fee: self.fee,
-                fmd_clues: vec![],
+                fmd_clues,
             },
             anchor: witness_data.anchor,
             binding_sig,

@@ -38,8 +38,9 @@ fn load_wallet_into_tmpdir() -> TempDir {
         .args(&[
             "--data-path",
             tmpdir.path().to_str().unwrap(),
-            "wallet",
-            "import-from-phrase",
+            "keys",
+            "import",
+            "phrase",
             TEST_SEED_PHRASE,
         ])
         .timeout(std::time::Duration::from_secs(TIMEOUT_COMMAND_SECONDS));
@@ -80,6 +81,7 @@ fn transaction_send_from_addr_0_to_addr_1() {
         .args(&[
             "--data-path",
             tmpdir.path().to_str().unwrap(),
+            "view",
             "balance",
             "--by-address",
         ])

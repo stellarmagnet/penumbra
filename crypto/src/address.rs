@@ -3,9 +3,12 @@ use std::io::{Cursor, Read, Write};
 use ark_serialize::CanonicalDeserialize;
 use f4jumble::{f4jumble, f4jumble_inv};
 use penumbra_proto::{crypto as pb, serializers::bech32str};
+use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 
 use crate::{fmd, ka, keys::Diversifier, Fq};
+
+pub const ADDRESS_LEN_BYTES: usize = 80;
 
 /// A valid payment address.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,8 +23,8 @@ pub struct Address {
     /// this ensures we can use a PaymentAddress to form a note commitment,
     /// which involves hashing s as a field element.
     pk_d: ka::Public,
-    /// cached s value
-    cached_s: Fq,
+    /// transmission key s value
+    transmission_key_s: Fq,
 
     ck_d: fmd::ClueKey,
 }
@@ -39,14 +42,14 @@ impl Address {
     ) -> Option<Self> {
         // XXX ugly -- better way to get our hands on the s value?
         // add to decaf377::Encoding? there's compress_to_field already...
-        if let Ok(cached_s) = Fq::deserialize(&pk_d.0[..]) {
+        if let Ok(transmission_key_s) = Fq::deserialize(&pk_d.0[..]) {
             // don't need an error type here, caller will probably .expect anyways
             Some(Self {
                 d,
                 g_d,
                 pk_d,
                 ck_d,
-                cached_s,
+                transmission_key_s,
             })
         } else {
             None
@@ -68,43 +71,36 @@ impl Address {
     pub fn clue_key(&self) -> &fmd::ClueKey {
         &self.ck_d
     }
-}
 
-impl From<Address> for pb::Address {
-    fn from(a: Address) -> Self {
+    pub fn transmission_key_s(&self) -> &Fq {
+        &self.transmission_key_s
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
         let mut bytes = std::io::Cursor::new(Vec::new());
         bytes
-            .write_all(&a.diversifier().0)
+            .write_all(&self.diversifier().0)
             .expect("can write diversifier into vec");
         bytes
-            .write_all(&a.transmission_key().0)
+            .write_all(&self.transmission_key().0)
             .expect("can write transmission key into vec");
         bytes
-            .write_all(&a.clue_key().0)
+            .write_all(&self.clue_key().0)
             .expect("can write clue key into vec");
 
-        let jumbled_bytes = f4jumble(bytes.get_ref()).expect("can jumble");
-        pb::Address {
-            inner: jumbled_bytes,
-        }
+        f4jumble(bytes.get_ref()).expect("can jumble")
     }
-}
 
-impl TryFrom<pb::Address> for Address {
-    type Error = anyhow::Error;
-    fn try_from(value: pb::Address) -> Result<Self, Self::Error> {
-        let unjumbled_bytes =
-            f4jumble_inv(&value.inner).ok_or_else(|| anyhow::anyhow!("invalid address"))?;
-        let mut bytes = Cursor::new(unjumbled_bytes);
-
+    /// A randomized dummy address for dummy `Clue` generation.
+    pub fn dummy<R: CryptoRng + Rng>(mut rng: R) -> Self {
         let mut diversifier_bytes = [0u8; 16];
-        bytes.read_exact(&mut diversifier_bytes)?;
+        rng.fill_bytes(&mut diversifier_bytes);
 
         let mut pk_d_bytes = [0u8; 32];
-        bytes.read_exact(&mut pk_d_bytes)?;
+        rng.fill_bytes(&mut pk_d_bytes);
 
         let mut clue_key_bytes = [0; 32];
-        bytes.read_exact(&mut clue_key_bytes)?;
+        rng.fill_bytes(&mut clue_key_bytes);
 
         let diversifier = Diversifier(diversifier_bytes);
         Address::from_components(
@@ -113,7 +109,21 @@ impl TryFrom<pb::Address> for Address {
             ka::Public(pk_d_bytes),
             fmd::ClueKey(clue_key_bytes),
         )
-        .ok_or_else(|| anyhow::anyhow!("invalid address"))
+        .expect("generated dummy address")
+    }
+}
+
+impl From<Address> for pb::Address {
+    fn from(a: Address) -> Self {
+        pb::Address { inner: a.to_vec() }
+    }
+}
+
+impl TryFrom<pb::Address> for Address {
+    type Error = anyhow::Error;
+
+    fn try_from(value: pb::Address) -> Result<Self, Self::Error> {
+        (&value.inner).try_into()
     }
 }
 
@@ -145,6 +155,66 @@ impl std::str::FromStr for Address {
     }
 }
 
+impl TryFrom<Vec<u8>> for Address {
+    type Error = anyhow::Error;
+
+    fn try_from(jumbled_vec: Vec<u8>) -> Result<Self, Self::Error> {
+        (&jumbled_vec[..]).try_into()
+    }
+}
+
+impl TryFrom<&Vec<u8>> for Address {
+    type Error = anyhow::Error;
+
+    fn try_from(jumbled_vec: &Vec<u8>) -> Result<Self, Self::Error> {
+        (jumbled_vec[..]).try_into()
+    }
+}
+
+impl TryFrom<&[u8]> for Address {
+    type Error = anyhow::Error;
+
+    fn try_from(jumbled_bytes: &[u8]) -> Result<Self, Self::Error> {
+        if jumbled_bytes.len() != ADDRESS_LEN_BYTES {
+            return Err(anyhow::anyhow!("address malformed"));
+        }
+
+        let unjumbled_bytes =
+            f4jumble_inv(jumbled_bytes).ok_or_else(|| anyhow::anyhow!("invalid address"))?;
+        let mut bytes = Cursor::new(unjumbled_bytes);
+
+        let mut diversifier_bytes = [0u8; 16];
+        bytes
+            .read_exact(&mut diversifier_bytes)
+            .map_err(|_| anyhow::anyhow!("address malformed"))?;
+
+        let mut pk_d_bytes = [0u8; 32];
+        bytes
+            .read_exact(&mut pk_d_bytes)
+            .map_err(|_| anyhow::anyhow!("address malformed"))?;
+
+        let mut clue_key_bytes = [0; 32];
+        bytes
+            .read_exact(&mut clue_key_bytes)
+            .map_err(|_| anyhow::anyhow!("address malformed"))?;
+
+        let diversifier = Diversifier(diversifier_bytes);
+
+        let address = Address::from_components(
+            diversifier,
+            diversifier.diversified_generator(),
+            ka::Public(pk_d_bytes),
+            fmd::ClueKey(clue_key_bytes),
+        );
+
+        if address.is_none() {
+            return Err(anyhow::anyhow!("address malformed"));
+        }
+
+        Ok(address.unwrap())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -168,5 +238,35 @@ mod tests {
         let addr = Address::from_str(&encoded_addr).expect("can decode valid address");
 
         assert_eq!(addr, dest);
+    }
+
+    #[test]
+    fn test_bytes_roundtrip() {
+        let mut rng = OsRng;
+        let seed_phrase = SeedPhrase::generate(&mut rng);
+        let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
+        let fvk = sk.full_viewing_key();
+        let ivk = fvk.incoming();
+        let (dest, _dtk_d) = ivk.payment_address(0u64.into());
+
+        let bytes = dest.to_vec();
+        let addr: Address = bytes.try_into().expect("can decode valid address");
+
+        assert_eq!(addr, dest);
+    }
+
+    #[test]
+    fn test_address_keys_are_diversified() {
+        let mut rng = OsRng;
+        let seed_phrase = SeedPhrase::generate(&mut rng);
+        let sk = SpendKey::from_seed_phrase(seed_phrase, 0);
+        let fvk = sk.full_viewing_key();
+        let ivk = fvk.incoming();
+        let (dest1, dtk_d1) = ivk.payment_address(0u64.into());
+        let (dest2, dtk_d2) = ivk.payment_address(1u64.into());
+
+        assert!(dest1.transmission_key() != dest2.transmission_key());
+        assert!(dest1.clue_key() != dest2.clue_key());
+        assert!(dtk_d1.to_bytes() != dtk_d2.to_bytes());
     }
 }

@@ -2,7 +2,9 @@ use blake2b_simd::Hash;
 
 use penumbra_proto::{crypto as pb, Protobuf};
 
-#[derive(Clone, Debug)]
+use crate::{Value, STAKING_TOKEN_ASSET_ID};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fee(pub u64);
 
 impl Protobuf<pb::Fee> for Fee {}
@@ -24,5 +26,12 @@ impl Fee {
         blake2b_simd::Params::default()
             .personal(b"PAH:fee")
             .hash(&self.0.to_le_bytes())
+    }
+
+    pub fn value(&self) -> Value {
+        Value {
+            amount: self.0,
+            asset_id: *STAKING_TOKEN_ASSET_ID,
+        }
     }
 }

@@ -45,8 +45,7 @@ message SwapClaimProof {
    * Describes the input note with the Swap NFT
    */
   bytes swap_nft_asset_id = 1;
-  bytes b_d = 2;
-  bytes pk_d = 3;
+  crypto.Address claim_address = 2;
   // Inclusion proof for the Swap NFT
   crypto.NoteCommitmentProof note_commitment_proof = 4;
   bytes note_blinding = 5;
@@ -89,9 +88,13 @@ message SwapProof {
    * @exclude
    * Describes swap inputs
   */
+  // Input amount of asset 1
   uint64 delta_1 = 1;
+  // Id of asset 1
   bytes t1 = 2;
+  // Input amount of asset 2
   uint64 delta_2 = 3;
+  // Id of asset 2
   bytes t2 = 4;
 
   // Fee
@@ -100,23 +103,26 @@ message SwapProof {
   /**
    * @exclude
    * Blinding factors for value commitments
+   * TODO: not included until flow encryption is available
   */
-  bytes delta_1_blinding = 20;
-  bytes delta_2_blinding = 21;
-  bytes fee_blinding = 22;
+  // bytes delta_1_blinding = 20;
+  // bytes delta_2_blinding = 21;
 
   /**
    * @exclude
-   * Asset ID of the Swap NFT.
+   * Swap NFT data.
   */
+  // Asset ID of the Swap NFT
   bytes swap_nft_asset_id = 30;
 
   /**
    * @exclude
    * Data about the output note recording the Swap NFT.
   */
-  bytes b_d = 40;
-  bytes pk_d = 41;
+  // Address associated with the swap.
+  crypto.Address claim_address = 40;
+  // Note blinding factor
   bytes note_blinding = 42;
+  // Ephemeral secret key
   bytes esk = 43;
 }

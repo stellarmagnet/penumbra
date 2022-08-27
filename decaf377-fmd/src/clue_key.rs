@@ -1,6 +1,6 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, convert::TryFrom};
 
-use ark_ff::{Field, UniformRand};
+use ark_ff::{Field, PrimeField};
 use bitvec::{array::BitArray, order};
 use decaf377::{FieldExt, Fr};
 use rand_core::{CryptoRng, RngCore};
@@ -40,7 +40,7 @@ impl ExpandedClueKey {
     pub fn new(clue_key: &ClueKey) -> Result<Self, Error> {
         let root_pub_enc = decaf377::Encoding(clue_key.0);
         let root_pub = root_pub_enc
-            .decompress()
+            .vartime_decompress()
             .map_err(|_| Error::InvalidAddress)?;
 
         Ok(ExpandedClueKey {
@@ -74,7 +74,8 @@ impl ExpandedClueKey {
     }
 
     /// Create a [`Clue`] intended for the [`DetectionKey`](crate::DetectionKey)
-    /// corresponding to this clue key.
+    /// corresponding to this clue key, deterministically, using the provided
+    /// random seed.
     ///
     /// The clue will be detected by the intended detection key with probability
     /// 1, and by other detection keys with probability `2^{-precision_bits}`.
@@ -83,10 +84,10 @@ impl ExpandedClueKey {
     ///
     /// `precision_bits` must be smaller than [`MAX_PRECISION`].
     #[allow(non_snake_case)]
-    pub fn create_clue<R: RngCore + CryptoRng>(
+    pub fn create_clue_deterministic(
         &self,
         precision_bits: usize,
-        mut rng: R,
+        rseed: [u8; 32],
     ) -> Result<Clue, Error> {
         if precision_bits >= MAX_PRECISION {
             return Err(Error::PrecisionTooLarge(precision_bits));
@@ -95,19 +96,37 @@ impl ExpandedClueKey {
         // Ensure that at least `precision_bits` subkeys are available.
         self.ensure_at_least(precision_bits)?;
 
-        let r = Fr::rand(&mut rng);
-        let z = Fr::rand(&mut rng);
+        let r = {
+            let hash = blake2b_simd::Params::default()
+                .personal(b"decaf377-fmd.rdv")
+                .to_state()
+                .update(&self.root_pub_enc.0)
+                .update(&rseed)
+                .finalize();
+
+            Fr::from_le_bytes_mod_order(hash.as_bytes())
+        };
+        let z = {
+            let hash = blake2b_simd::Params::default()
+                .personal(b"decaf377-fmd.zdv")
+                .to_state()
+                .update(&self.root_pub_enc.0)
+                .update(&rseed)
+                .finalize();
+
+            Fr::from_le_bytes_mod_order(hash.as_bytes())
+        };
 
         let P = r * decaf377::basepoint();
-        let P_encoding = P.compress();
+        let P_encoding = P.vartime_compress();
         let Q = z * decaf377::basepoint();
-        let Q_encoding = Q.compress();
+        let Q_encoding = Q.vartime_compress();
 
         let mut ctxts = BitArray::<order::Lsb0, [u8; 3]>::zeroed();
         let Xs = self.subkeys.borrow();
 
         for i in 0..precision_bits {
-            let rXi = (r * Xs[i]).compress();
+            let rXi = (r * Xs[i]).vartime_compress();
             let key_i = hash::to_bit(&P_encoding.0, &rXi.0, &Q_encoding.0);
             let ctxt_i = key_i ^ 1u8;
             ctxts.set(i, ctxt_i != 0);
@@ -123,5 +142,39 @@ impl ExpandedClueKey {
         buf[65..68].copy_from_slice(ctxts.as_buffer());
 
         Ok(Clue(buf))
+    }
+
+    /// Create a [`Clue`] intended for the [`DetectionKey`](crate::DetectionKey)
+    /// corresponding to this clue key.
+    ///
+    /// The clue will be detected by the intended detection key with probability
+    /// 1, and by other detection keys with probability `2^{-precision_bits}`.
+    ///
+    /// # Errors
+    ///
+    /// `precision_bits` must be smaller than [`MAX_PRECISION`].
+    #[allow(non_snake_case)]
+    pub fn create_clue<R: RngCore + CryptoRng>(
+        &self,
+        precision_bits: usize,
+        mut rng: R,
+    ) -> Result<Clue, Error> {
+        let mut rseed = [0u8; 32];
+        rng.fill_bytes(&mut rseed);
+        self.create_clue_deterministic(precision_bits, rseed)
+    }
+}
+
+impl TryFrom<&[u8]> for ClueKey {
+    type Error = Error;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        if bytes.len() == 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes[0..32]);
+            Ok(ClueKey(arr))
+        } else {
+            Err(Error::InvalidClueKey)
+        }
     }
 }

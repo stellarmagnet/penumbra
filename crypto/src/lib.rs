@@ -19,7 +19,7 @@ mod note_payload;
 mod nullifier;
 mod prf;
 pub mod proofs;
-mod symmetric;
+pub mod symmetric;
 pub mod transaction;
 pub mod value;
 
@@ -32,6 +32,7 @@ pub use keys::FullViewingKey;
 pub use note::Note;
 pub use note_payload::NotePayload;
 pub use nullifier::Nullifier;
+pub use symmetric::PayloadKey;
 pub use value::Value;
 
 fn fmt_hex<T: AsRef<[u8]>>(data: T, f: &mut std::fmt::Formatter) -> std::fmt::Result {

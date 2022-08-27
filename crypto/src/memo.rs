@@ -6,8 +6,7 @@ use crate::{
     ka,
     keys::{IncomingViewingKey, OutgoingViewingKey},
     note,
-    note::OVK_WRAPPED_LEN_BYTES,
-    symmetric::{PayloadKey, PayloadKind},
+    symmetric::{OvkWrappedKey, PayloadKey, PayloadKind},
     value, Address, Note,
 };
 
@@ -17,6 +16,7 @@ pub const MEMO_CIPHERTEXT_LEN_BYTES: usize = 528;
 pub const MEMO_LEN_BYTES: usize = 512;
 
 // The memo is stored separately from the `Note`.
+// TODO: MemoPlaintext should just be a fixed-length string, drop this type entirely
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoPlaintext(pub [u8; MEMO_LEN_BYTES]);
 
@@ -67,7 +67,7 @@ impl MemoPlaintext {
             .key_agreement_with(epk)
             .map_err(|_| anyhow!("could not perform key agreement"))?;
 
-        let key = PayloadKey::derive(&shared_secret, &epk);
+        let key = PayloadKey::derive(&shared_secret, epk);
         let plaintext = key
             .decrypt(ciphertext.0.to_vec(), PayloadKind::Memo)
             .map_err(|_| anyhow!("decryption error"))?;
@@ -82,18 +82,16 @@ impl MemoPlaintext {
     /// Decrypt a `MemoCiphertext` using the wrapped OVK to generate a plaintext `Memo`.
     pub fn decrypt_outgoing(
         ciphertext: MemoCiphertext,
-        wrapped_ovk: [u8; OVK_WRAPPED_LEN_BYTES],
+        wrapped_ovk: OvkWrappedKey,
         cm: note::Commitment,
         cv: value::Commitment,
         ovk: &OutgoingViewingKey,
         epk: &ka::Public,
     ) -> Result<MemoPlaintext, anyhow::Error> {
-        let (esk, transmission_key) = Note::decrypt_key(wrapped_ovk, cm, cv, ovk, epk)
+        let shared_secret = Note::decrypt_key(wrapped_ovk, cm, cv, ovk, epk)
             .map_err(|_| anyhow!("key decryption error"))?;
-        let shared_secret = esk
-            .key_agreement_with(&transmission_key)
-            .map_err(|_| anyhow!("could not perform key agreement"))?;
-        let key = PayloadKey::derive(&shared_secret, &epk);
+
+        let key = PayloadKey::derive(&shared_secret, epk);
         let plaintext = key
             .decrypt(ciphertext.0.to_vec(), PayloadKind::Memo)
             .map_err(|_| anyhow!("decryption error"))?;

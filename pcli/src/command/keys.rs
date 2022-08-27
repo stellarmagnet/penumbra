@@ -9,32 +9,38 @@ use sha2::{Digest, Sha256};
 use crate::KeyStore;
 
 #[derive(Debug, clap::Subcommand)]
-pub enum WalletCmd {
-    /// Import from an existing seed phrase.
-    ImportFromPhrase {
-        /// A 24 word phrase in quotes.
-        seed_phrase: String,
-    },
-    /// Export the full viewing key for the wallet.
-    ExportFvk,
-    /// Generate a new seed phrase.
+pub enum KeysCmd {
+    /// Import an existing key.
+    #[clap(subcommand)]
+    Import(ImportCmd),
+    /// Export keys from the wallet.
+    #[clap(subcommand)]
+    Export(ExportCmd),
+    /// Generate a new seed phrase and import its corresponding key.
     Generate,
-    /// Keep the spend seed, but reset all other client state.
-    Reset,
     /// Delete the entire wallet permanently.
     Delete,
 }
 
-impl WalletCmd {
+#[derive(Debug, clap::Subcommand)]
+pub enum ImportCmd {
+    /// Import from an existing seed phrase.
+    Phrase {
+        /// A 24 word phrase in quotes.
+        seed_phrase: String,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum ExportCmd {
+    /// Export the full viewing key for the wallet.
+    FullViewingKey,
+}
+
+impl KeysCmd {
     /// Determine if this command requires a network sync before it executes.
     pub fn needs_sync(&self) -> bool {
-        match self {
-            WalletCmd::ImportFromPhrase { .. } => false,
-            WalletCmd::ExportFvk => false,
-            WalletCmd::Generate => false,
-            WalletCmd::Reset => false,
-            WalletCmd::Delete => false,
-        }
+        false
     }
 
     fn archive_wallet(&self, wallet: &KeyStore) -> Result<()> {
@@ -60,7 +66,7 @@ impl WalletCmd {
     pub fn exec(&self, data_dir: impl AsRef<camino::Utf8Path>) -> Result<()> {
         let data_dir = data_dir.as_ref();
         match self {
-            WalletCmd::Generate => {
+            KeysCmd::Generate => {
                 let seed_phrase = SeedPhrase::generate(&mut OsRng);
 
                 // xxx: Something better should be done here, this is in danger of being
@@ -74,16 +80,16 @@ impl WalletCmd {
                 wallet.save(data_dir.join(crate::CUSTODY_FILE_NAME))?;
                 self.archive_wallet(&wallet)?;
             }
-            WalletCmd::ImportFromPhrase { seed_phrase } => {
+            KeysCmd::Import(ImportCmd::Phrase { seed_phrase }) => {
                 let wallet = KeyStore::from_seed_phrase(SeedPhrase::from_str(seed_phrase)?);
                 wallet.save(data_dir.join(crate::CUSTODY_FILE_NAME))?;
                 self.archive_wallet(&wallet)?;
             }
-            WalletCmd::ExportFvk => {
+            KeysCmd::Export(ExportCmd::FullViewingKey) => {
                 let wallet = KeyStore::load(data_dir.join(crate::CUSTODY_FILE_NAME))?;
                 println!("{}", wallet.spend_key.full_viewing_key());
             }
-            WalletCmd::Delete => {
+            KeysCmd::Delete => {
                 let wallet_path = data_dir.join(crate::CUSTODY_FILE_NAME);
                 if wallet_path.is_file() {
                     std::fs::remove_file(&wallet_path)?;
@@ -100,25 +106,8 @@ impl WalletCmd {
                     ));
                 }
             }
-            WalletCmd::Reset => {
-                tracing::info!("resetting client state");
-                let view_path = data_dir.join(crate::VIEW_FILE_NAME);
-                if view_path.is_file() {
-                    std::fs::remove_file(&view_path)?;
-                    println!("Deleted view data at {}", view_path);
-                } else if view_path.exists() {
-                    return Err(anyhow!(
-                            "Expected view data at {} but found something that is not a file; refusing to delete it",
-                            view_path
-                        ));
-                } else {
-                    return Err(anyhow!(
-                        "No view data exists at {}, so it cannot be deleted",
-                        view_path
-                    ));
-                }
-            }
         };
+
         Ok(())
     }
 }

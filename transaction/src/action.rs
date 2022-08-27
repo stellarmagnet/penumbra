@@ -4,15 +4,17 @@ use penumbra_crypto::value;
 use penumbra_proto::{ibc as pb_ibc, stake as pbs, transaction as pb, Protobuf};
 
 mod delegate;
+mod ibc;
 pub mod output;
 mod position;
 mod propose;
 pub mod spend;
-mod swap;
-mod swap_claim;
+pub mod swap;
+pub mod swap_claim;
 mod undelegate;
 mod vote;
 
+pub use self::ibc::ICS20Withdrawal;
 pub use delegate::Delegate;
 pub use output::Output;
 pub use position::{PositionClose, PositionOpen, PositionRewardClaim, PositionWithdraw};
@@ -25,6 +27,7 @@ pub use vote::{DelegatorVote, ValidatorVote, ValidatorVoteBody, Vote};
 
 /// An action performed by a Penumbra transaction.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Action {
     Output(output::Output),
     Spend(spend::Spend),
@@ -32,9 +35,8 @@ pub enum Action {
     Undelegate(Undelegate),
     ValidatorDefinition(pbs::ValidatorDefinition),
     IBCAction(pb_ibc::IbcAction),
-    // TODO: re-enable when Swap/SwapClaim is ready
-    // Swap(Swap),
-    // SwapClaim(SwapClaim),
+    Swap(Swap),
+    SwapClaim(SwapClaim),
     ProposalSubmit(ProposalSubmit),
     ProposalWithdraw(ProposalWithdraw),
     // DelegatorVote(DelegatorVote),
@@ -44,6 +46,8 @@ pub enum Action {
     PositionClose(PositionClose),
     PositionWithdraw(PositionWithdraw),
     PositionRewardClaim(PositionRewardClaim),
+
+    ICS20Withdrawal(ICS20Withdrawal),
 }
 
 impl Action {
@@ -55,9 +59,8 @@ impl Action {
             Action::Spend(spend) => spend.body.value_commitment,
             Action::Delegate(delegate) => delegate.value_commitment(),
             Action::Undelegate(undelegate) => undelegate.value_commitment(),
-            // TODO: re-enable when Swap/SwapClaim is ready
-            // Action::Swap(swap) => swap.value_commitment(),
-            // Action::SwapClaim(swap_claim) => swap_claim.value_commitment(),
+            Action::Swap(swap) => swap.value_commitment(),
+            Action::SwapClaim(swap_claim) => swap_claim.value_commitment(),
             // These actions just post data to the chain, and leave the value balance
             // unchanged.
             Action::ValidatorDefinition(_) => value::Commitment::default(),
@@ -71,6 +74,7 @@ impl Action {
             Action::PositionClose(p) => p.value_commitment(),
             Action::PositionWithdraw(p) => p.value_commitment(),
             Action::PositionRewardClaim(p) => p.value_commitment(),
+            Action::ICS20Withdrawal(withdrawal) => withdrawal.value_commitment(),
         }
     }
 }
@@ -95,6 +99,12 @@ impl From<Action> for pb::Action {
             Action::ValidatorDefinition(inner) => pb::Action {
                 action: Some(pb::action::Action::ValidatorDefinition(inner)),
             },
+            Action::SwapClaim(inner) => pb::Action {
+                action: Some(pb::action::Action::SwapClaim(inner.into())),
+            },
+            Action::Swap(inner) => pb::Action {
+                action: Some(pb::action::Action::Swap(inner.into())),
+            },
             Action::IBCAction(inner) => pb::Action {
                 action: Some(pb::action::Action::IbcAction(inner)),
             },
@@ -110,7 +120,6 @@ impl From<Action> for pb::Action {
             Action::ValidatorVote(inner) => pb::Action {
                 action: Some(pb::action::Action::ValidatorVote(inner.into())),
             },
-
             Action::PositionOpen(inner) => pb::Action {
                 action: Some(pb::action::Action::PositionOpen(inner.into())),
             },
@@ -123,18 +132,19 @@ impl From<Action> for pb::Action {
             Action::PositionRewardClaim(inner) => pb::Action {
                 action: Some(pb::action::Action::PositionRewardClaim(inner.into())),
             },
+            Action::ICS20Withdrawal(withdrawal) => pb::Action {
+                action: Some(pb::action::Action::Ics20Withdrawal(withdrawal.into())),
+            },
         }
     }
 }
 
 impl TryFrom<pb::Action> for Action {
     type Error = anyhow::Error;
-
     fn try_from(proto: pb::Action) -> anyhow::Result<Self, Self::Error> {
         if proto.action.is_none() {
             return Err(anyhow::anyhow!("missing action content"));
         }
-
         match proto.action.unwrap() {
             pb::action::Action::Output(inner) => Ok(Action::Output(inner.try_into()?)),
             pb::action::Action::Spend(inner) => Ok(Action::Spend(inner.try_into()?)),
@@ -143,6 +153,8 @@ impl TryFrom<pb::Action> for Action {
             pb::action::Action::ValidatorDefinition(inner) => {
                 Ok(Action::ValidatorDefinition(inner))
             }
+            pb::action::Action::SwapClaim(inner) => Ok(Action::SwapClaim(inner.try_into()?)),
+            pb::action::Action::Swap(inner) => Ok(Action::Swap(inner.try_into()?)),
             pb::action::Action::IbcAction(inner) => Ok(Action::IBCAction(inner)),
             pb::action::Action::ProposalSubmit(inner) => {
                 Ok(Action::ProposalSubmit(inner.try_into()?))
@@ -166,6 +178,9 @@ impl TryFrom<pb::Action> for Action {
             }
             pb::action::Action::PositionRewardClaim(inner) => {
                 Ok(Action::PositionRewardClaim(inner.try_into()?))
+            }
+            pb::action::Action::Ics20Withdrawal(inner) => {
+                Ok(Action::ICS20Withdrawal(inner.try_into()?))
             }
         }
     }
