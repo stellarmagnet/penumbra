@@ -5,33 +5,45 @@ CREATE TABLE full_viewing_key (bytes BLOB NOT NULL);
 CREATE TABLE sync_height (height BIGINT NOT NULL);
 CREATE TABLE note_commitment_tree (bytes BLOB NOT NULL);
 
--- Minimal data required for balance tracking
--- Meant to represent notes which have been accepted into the note set
-CREATE TABLE spendable_notes (
+-- general note table
+CREATE TABLE notes (
     note_commitment         BLOB PRIMARY KEY NOT NULL,
-    height_spent            BIGINT, --null if unspent, otherwise spent at height_spent 
-    height_created          BIGINT NOT NULL,
     -- note contents themselves:
     address                 BLOB NOT NULL,
     amount                  BIGINT NOT NULL,
     asset_id                BLOB NOT NULL,
     blinding_factor         BLOB NOT NULL,
+);
+
+-- general purpose note queries
+CREATE INDEX notes_idx ON notes (
+    address_index,      -- then filter by account
+    asset_id,           -- then by asset
+    amount,             -- then by amount
+);
+
+-- Minimal data required for balance tracking
+-- Meant to represent notes which have been accepted into the note set
+CREATE TABLE spendable_notes (
+    note_commitment         BLOB PRIMARY KEY NOT NULL,
+    height_created          BIGINT NOT NULL,
     -- precomputed decryption of the diversifier
     address_index       BLOB NOT NULL,
+    -- the source of the note (a tx hash or structured data jammed into one)
+    source                  BLOB NOT NULL
+    --null if unspent, otherwise spent at height_spent 
+    height_spent            BIGINT, 
     -- the nullifier for this note, used to detect when it is spent
     nullifier               BLOB NOT NULL,
     -- the position of the note in the note commitment tree
     position                BIGINT NOT NULL,
-    -- the source of the note (a tx hash or structured data jammed into one)
-    source                  BLOB NOT NULL
+
 );
 
 -- general purpose note queries
 CREATE INDEX spendable_notes_idx ON spendable_notes (
     height_spent,       -- null if unspent, so spent/unspent is first
-    address_index,  -- then filter by account
-    asset_id,           -- then by asset
-    amount,             -- then by amount
+    address_index,      -- then filter by account
     height_created      -- we don't really care about this, except informationally
 );
 
@@ -50,25 +62,20 @@ CREATE TABLE assets (
 CREATE TABLE quarantined_notes (
     note_commitment         BLOB PRIMARY KEY NOT NULL,
     height_created          BIGINT NOT NULL,
-    -- note contents themselves:
-    address             BLOB NOT NULL,
-    amount                  BIGINT NOT NULL,
-    asset_id                BLOB NOT NULL,
-    blinding_factor         BLOB NOT NULL,
     -- precomputed decryption of the diversifier
-    address_index       BLOB NOT NULL,
+    address_index           BLOB NOT NULL,
+    -- the source of the note (a tx hash or structured data jammed into one)
+    source                  BLOB NOT NULL
     -- the quarantine status of the note
     unbonding_epoch         BIGINT NOT NULL,
     identity_key            BLOB NOT NULL,
-    -- the source of the note (a tx hash or structured data jammed into one)
-    source                  BLOB NOT NULL
+
 );
 
 CREATE INDEX quarantined_notes_idx ON quarantined_notes (
     identity_key,       -- first by identity key
     unbonding_epoch,    -- then by unbonding epoch
-    address_index,  -- then filter by account
-    amount,             -- then by amount
+    address_index,      -- then filter by account
     height_created      -- we don't really care about this, except informationally
 );
 
